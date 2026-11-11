@@ -92,7 +92,8 @@ class VolcASR:
         self._last_final_end = -1  # 已定稿分句的结束时间,用于去重
 
     async def start(self) -> None:
-        self._ws = await connect(self._url, additional_headers=self._headers)
+        # proxy=None: 不走系统代理,直连(否则系统配了 SOCKS 代理时会要求额外依赖)
+        self._ws = await connect(self._url, additional_headers=self._headers, proxy=None)
         payload = json.dumps(self._request).encode()
         await self._ws.send(encode(FULL_CLIENT_REQUEST, payload, is_json=True))
         self._reader = asyncio.create_task(self._read())

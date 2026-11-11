@@ -28,6 +28,12 @@ requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+demo = [
+    "fastapi>=0.162.4",
+    "httpx>=0.28.1",
+    "openai>=3.49.0",
+    "uvicorn>=0.54.0",
+]
 dev = [
     "pytest>=9.2.0",
 ]
