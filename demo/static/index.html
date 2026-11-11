@@ -31,7 +31,7 @@
             font-variant-numeric: tabular-nums; }
   #status[data-s="user"] { color: var(--ok); border-color: var(--ok); }
   #status[data-s="agent"] { color: var(--accent); border-color: var(--accent); }
-  #status[data-s="paused"] { color: var(--warn); border-color: var(--warn); }
+  #status[data-s="paused"], #status[data-s="ducked"] { color: var(--warn); border-color: var(--warn); }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
@@ -52,6 +52,7 @@
   #log .SpeculativeFinal .n { color: var(--warn); }
   #log .CommittedFinal .n { color: var(--accent); font-weight: 600; }
   #log .TurnDropped .n, #log .ctl .n { color: var(--dim); }
+  #log .judgment .n { color: var(--warn); font-weight: 600; }
   #log .error .n { color: var(--err); }
   footer { color: var(--dim); font-size: 12px; }
 </style>
@@ -100,15 +101,15 @@ class Capture extends AudioWorkletProcessor {
 }
 registerProcessor("capture", Capture);`;
 
-let ws, micCtx, micStream, playCtx;
-let running = false, nextPlayTime = 0, playing = false, paused = false, userSpeaking = false;
+let ws, micCtx, micStream, playCtx, playGain;
+let running = false, nextPlayTime = 0, playing = false, paused = false, ducked = false, userSpeaking = false;
 const sources = new Set();
 let liveUser = null, liveAgent = null, lastAgent = null;  // lastAgent: 文字已出完但还在播放的那条回复
 
 function setStatus() {
-  const s = !running ? "off" : paused ? "paused" : userSpeaking ? "user" : playing ? "agent" : "idle";
+  const s = !running ? "off" : paused ? "paused" : ducked ? "ducked" : userSpeaking ? "user" : playing ? "agent" : "idle";
   statusEl.dataset.s = s;
-  statusEl.textContent = { off: "未连接", paused: "已暂停播放(疑似打断)", user: "你在说话", agent: "agent 在说话", idle: "聆听中" }[s];
+  statusEl.textContent = { off: "未连接", paused: "已暂停,在听你说", ducked: "已压低音量", user: "你在说话", agent: "agent 在说话", idle: "聆听中" }[s];
 }
 
 function addLog(cls, time, name, text) {
@@ -142,7 +143,7 @@ function playPcm(arrayBuffer) {
   const data = buffer.getChannelData(0);
   for (let i = 0; i < pcm.length; i++) data[i] = pcm[i] / 0x8000;
   const src = playCtx.createBufferSource();
-  src.buffer = buffer; src.connect(playCtx.destination);
+  src.buffer = buffer; src.connect(playGain);
   nextPlayTime = Math.max(nextPlayTime, playCtx.currentTime + 0.05);
   src.start(nextPlayTime);
   nextPlayTime += buffer.duration;
@@ -154,7 +155,7 @@ function playPcm(arrayBuffer) {
 function clearPlayback() {
   for (const src of sources) { src.onended = null; src.stop(); }
   sources.clear(); nextPlayTime = 0;
-  playCtx.resume();
+  playGain.gain.value = 1; playCtx.resume();
   reportPlaying(false);
 }
 
@@ -175,13 +176,18 @@ function onMessage(msg) {
   } else if (msg.type === "latency") {
     $("latency").textContent = `提交 → 首个音频: ${msg.ms} ms`;
     addLog("ctl", "", "latency", `提交 → 首个音频 ${msg.ms} ms`);
+  } else if (msg.type === "duck") {
+    ducked = true; playGain.gain.value = 0.25; addLog("ctl", "", "duck", "用户开口,压低音量");
   } else if (msg.type === "pause") {
-    paused = true; playCtx.suspend(); addLog("ctl", "", "pause", "用户开口,暂停播放");
+    paused = true; playCtx.suspend(); addLog("ctl", "", "pause", "用户在说话,暂停播放");
   } else if (msg.type === "resume") {
-    paused = false; playCtx.resume(); addLog("ctl", "", "resume", "不是打断,恢复播放");
+    paused = ducked = false; playGain.gain.value = 1; playCtx.resume(); addLog("ctl", "", "resume", "恢复播放");
   } else if (msg.type === "clear") {
-    paused = false; clearPlayback(); addLog("ctl", "", "clear", "确认打断,停止播放");
+    paused = ducked = false; clearPlayback(); addLog("ctl", "", "clear", "停止播放并丢弃当前回复");
     lastAgent?.classList.add("cut"); liveAgent = lastAgent = null;
+  } else if (msg.type === "judgment") {
+    const label = { continue: "继续", queue: "排队", interrupt: "打断", stop: "停止" }[msg.decision];
+    addLog("judgment", "", "judgment", `${label} (${msg.decision}, 置信度 ${msg.confidence}, ${msg.ms} ms)`);
   } else if (msg.type === "error") {
     addLog("error", "", "error", msg.message);
   }
@@ -214,6 +220,7 @@ async function start() {
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
 
   playCtx = new AudioContext();
+  playGain = playCtx.createGain(); playGain.connect(playCtx.destination);
   micCtx = new AudioContext({ sampleRate: 16000 });  // 浏览器负责把麦克风重采样到 16kHz
   await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
   const capture = new AudioWorkletNode(micCtx, "capture");
@@ -224,7 +231,7 @@ async function start() {
 }
 
 function stop() {
-  running = false; paused = false; userSpeaking = false; playing = false;
+  running = false; paused = ducked = false; userSpeaking = false; playing = false;
   micStream?.getTracks().forEach((t) => t.stop());
   micCtx?.close(); playCtx?.close(); ws?.close();
   sources.clear(); nextPlayTime = 0; liveUser = liveAgent = lastAgent = null;

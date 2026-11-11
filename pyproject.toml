@@ -22,6 +22,12 @@ smart-turn = [
 volc = [
     "websockets>=17.4",
 ]
+jev = [
+    "typesafe-sdk>=0.7.5",
+]
+llm-judge = [
+    "openai>=3.49.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
@@ -30,7 +36,6 @@ build-backend = "uv_build"
 [dependency-groups]
 demo = [
     "fastapi>=0.162.4",
-    "httpx>=0.28.1",
     "openai>=3.49.0",
     "uvicorn>=0.54.0",
 ]
